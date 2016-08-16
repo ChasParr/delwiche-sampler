@@ -13,15 +13,20 @@ typedef struct {
   int dir_pin;
   int enable_pin;
   int switch_pin;
-  long steps_per_mm;
+  float steps_per_mm;
   long pos;           // position in microsteps
-  long dir;           // used for movement
+  long min_pos;       // minimum position on axis in microsteps (usually 0)
+  long max_pos;       // maximum position on axis in microsteps
+  int dir;            // used for movement
+  bool invert;        // flips the motor direction
 } Motor;
 
 // Vars
 Motor motors[NUM_AXES];
 char buffer[MAX_BUF];
 int sofar;
+boolean abs_mode;
+boolean mm_mode;
 
 // speeds
 long fr = 0;
@@ -48,22 +53,29 @@ void set_feedrate(long nfr) {
   fr = nfr;
 }
 
-/**
- * write a string followed by a float to the serial line.  Convenient for debugging.
- * @input code the string.
- * @input val the float.
- */
-void output(char *code,float val) {
-  Serial.print(code);
-  Serial.println(val);
-}
-
 void where() {
-  output("X", motors[0].pos);
-  output("Y", motors[1].pos);
-  output("Z", motors[2].pos);
-  output("E", motors[3].pos);
-  output("F", fr);
+  Serial.print("X ");
+  Serial.print(motors[0].pos / motors[0].steps_per_mm);
+  Serial.print("mm ");
+  Serial.print(motors[0].pos);
+  Serial.println(" micro steps");
+  Serial.print("Y ");
+  Serial.print(motors[1].pos / motors[1].steps_per_mm);
+  Serial.print("mm ");
+  Serial.print(motors[1].pos);
+  Serial.println(" micro steps");
+  Serial.print("Z ");
+  Serial.print(motors[2].pos / motors[2].steps_per_mm);
+  Serial.print("mm ");
+  Serial.print(motors[2].pos);
+  Serial.println(" micro steps");
+  Serial.print("E ");
+  Serial.print(motors[3].pos / motors[3].steps_per_mm);
+  Serial.print("mm ");
+  Serial.print(motors[3].pos);
+  Serial.println(" micro steps");
+  Serial.print("F ");
+  Serial.println(fr);
 }
 /**
  * print helpful info
@@ -71,11 +83,11 @@ void where() {
 void help() {
   Serial.println(F("Commands:"));
   Serial.println(F("G00 [X/Y/Z/E(microsteps)] [F(steps/sec)]; - rapid move"));
-  Serial.println(F("G01 [X/Y/Z/E(steps)] [F(feedrate)]; - linear move"));
-  //Serial.println(F("G04 P[seconds]; - delay"));
-  //Serial.println(F("G90; - absolute mode"));
-  //Serial.println(F("G91; - relative mode"));
-  //Serial.println(F("G92 [x(steps)] [Y(steps)]; - change logical position"));
+  Serial.println(F("G21; - set units to mm"));  
+  Serial.println(F("G24; - set units to micro steps"));  
+  Serial.println(F("G28; - zero position"));  
+  Serial.println(F("G90; - absolute mode"));
+  Serial.println(F("G91; - relative mode"));
   Serial.println(F("M17; - enable motors"));
   Serial.println(F("M18; - disable motors"));
   Serial.println(F("M100; - this help message"));
@@ -84,7 +96,7 @@ void help() {
 }
 
 /**
- * set up the motor pins and define the steps per mm
+ * set up the motor pins and variables
  */
 void motor_setup() {
   motors[0].step_pin = 54;
@@ -92,24 +104,40 @@ void motor_setup() {
   motors[0].enable_pin = 38;
   motors[0].switch_pin = 3;
   motors[0].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 50;
+  motors[0].pos = 1;  // ensures it will zero on startup
+  motors[0].min_pos = 0;
+  motors[0].max_pos = 220 * motors[0].steps_per_mm;
+  motors[0].invert = true;
 
   motors[1].step_pin = 60;
   motors[1].dir_pin = 61;
   motors[1].enable_pin = 56;
-  motors[1].switch_pin = 18;
+  motors[1].switch_pin = 14;
   motors[1].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 50;
+  motors[1].pos = 1;  // ensures it will zero on startup
+  motors[1].min_pos = 0;
+  motors[1].max_pos = 200 * motors[1].steps_per_mm;
+  motors[1].invert = false;
 
   motors[2].step_pin = 46;
   motors[2].dir_pin = 48;
   motors[2].enable_pin = 63;
-  motors[2].switch_pin = 14;
-  motors[2].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 1;
+  motors[2].switch_pin = 18;
+  motors[2].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 1.2;
+  motors[2].pos = 1;  // ensures it will zero on startup
+  motors[2].min_pos = 0;
+  motors[2].max_pos = 200 * motors[2].steps_per_mm;
+  motors[2].invert = false;
 
   motors[3].step_pin = 26;
   motors[3].dir_pin = 28;
   motors[3].enable_pin = 24;
   motors[3].switch_pin = -1;
-  motors[3].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 15;
+  motors[3].steps_per_mm = STEPS_PER_TURN * MICROSTEPS / 14;
+  motors[3].pos = 0;
+  motors[3].min_pos = 0;
+  motors[3].max_pos = 57 * motors[3].steps_per_mm;
+  motors[3].invert = true;
 
   for(int i = 0; i < NUM_AXES; i++) {  
     // set the motor pin & scale
@@ -155,12 +183,52 @@ void processCommand() {
   switch(cmd) {
     case 0:  // move
       set_feedrate(parseNumber('F', fr));
-      rapid_move( parseNumber('X', motors[0].pos),
-                  parseNumber('Y', motors[1].pos),
-                  parseNumber('Z', motors[2].pos),
-                  parseNumber('E', motors[3].pos) );
+      if (!abs_mode){
+        if (mm_mode){
+          rapid_move( parseNumber('X', 0) * 100,
+                      parseNumber('Y', 0) * 100,
+                      parseNumber('Z', 0) * 100,
+                      parseNumber('E', 0) * 100);
+          
+        } else{
+          rapid_move( parseNumber('X', 0),
+                      parseNumber('Y', 0),
+                      parseNumber('Z', 0),
+                      parseNumber('E', 0) );
+        }
+      } else {
+        if (mm_mode){
+          rapid_move( parseNumber('X', motors[0].pos / motors[0].steps_per_mm) * 100,
+                      parseNumber('Y', motors[1].pos / motors[1].steps_per_mm) * 100,
+                      parseNumber('Z', motors[2].pos / motors[2].steps_per_mm) * 100,
+                      parseNumber('E', motors[3].pos / motors[3].steps_per_mm) * 100);
+          
+        } else{
+          rapid_move( parseNumber('X', motors[0].pos),
+                      parseNumber('Y', motors[1].pos),
+                      parseNumber('Z', motors[2].pos),
+                      parseNumber('E', motors[3].pos) );
+        }
+      }
       break;
-    case 1: // move in a line
+    case 21:  // set units to mm
+      mm_mode = true;
+      Serial.println("input set to mm"); 
+      break;
+    case 24:  // set units to micro steps
+      mm_mode = false;
+      Serial.println("input set to micro steps"); 
+      break;
+    case 28:  // zero position
+      zero_position();
+      break;
+    case 90:
+      abs_mode = true;
+      Serial.println("mode set to absolute, enter positions to move to them"); 
+      break;
+    case 91:
+      abs_mode = false;
+      Serial.println("mode set to relative, enter distances to move"); 
       break;
     default: break;
     }
@@ -170,6 +238,7 @@ void processCommand() {
     case  17:  motor_enable();  break;
     case  18:  motor_disable();  break;
     case 100:  help();  break;
+    case 114:  where(); break;
     default:  break;
   }
 }
@@ -196,20 +265,51 @@ void motor_disable() {
  * reposition without linear interpolation
  */
 void rapid_move(long newX, long newY, long newZ, long newE) {
+  // store new position
   long new_pos[NUM_AXES];
   new_pos[0] = newX;
   new_pos[1] = newY;
   new_pos[2] = newZ;
   new_pos[3] = newE;
-
-  // set direction
+  
+  if (mm_mode){
+    for(int i = 0; i < NUM_AXES; i++){
+      new_pos[i] *= (motors[i].steps_per_mm / 100);
+    }
+  }
+  // add curent positions if in relative mode
+  if (!abs_mode) {
+    for(int i = 0; i < NUM_AXES; i++){
+      new_pos[i] += motors[i].pos;
+    }
+  }
+  
+  
   for(int i = 0; i < NUM_AXES; i++){
+    // check position validity and prevent illegal moves
+    if (new_pos[i] > motors[i].max_pos){
+      Serial.println("Move out of bounds, position now set to max");
+      new_pos[i] = motors[i].max_pos;
+    } else if (new_pos[i] < motors[i].min_pos){
+      Serial.println("Move out of bounds, position now set to min");
+      new_pos[i] = motors[i].min_pos;
+    }
+    
+    // set direction
     if (new_pos[i] > motors[i].pos){
       motors[i].dir = 1;
-      digitalWrite(motors[i].dir_pin, HIGH);
+      if (motors[i].invert){
+        digitalWrite(motors[i].dir_pin, LOW);
+      } else{
+        digitalWrite(motors[i].dir_pin, HIGH);
+      }
     } else{
       motors[i].dir = -1;
-      digitalWrite(motors[i].dir_pin, LOW);
+      if (motors[i].invert){
+        digitalWrite(motors[i].dir_pin, HIGH);
+      } else{
+        digitalWrite(motors[i].dir_pin, LOW);
+      }
     }
   }
 
@@ -233,20 +333,43 @@ void rapid_move(long newX, long newY, long newZ, long newE) {
 }
 
 /**
- * move to endstops
+ * move to endstops, 
  */
 void zero_position(){
-  for(int i = 0; i < NUM_AXES; i++) {
-    if (motors[i].switch_pin > 0){
-      Serial.print(motors[i].switch_pin);
-      Serial.print(" ");
-      Serial.println(digitalRead(motors[i].switch_pin));
+  
+  // set direction
+  for (int i = 0; i < NUM_AXES; i++){
+    if (motors[i].invert){
+      digitalWrite(motors[i].dir_pin, HIGH);
+    } else{
+      digitalWrite(motors[i].dir_pin, LOW);
     }
   }
-  motors[0].pos = 0;
-  motors[1].pos = 0;
-  motors[2].pos = 0;
-  motors[3].pos = 0;
+
+  // loop until no more moves are necessary
+  int check;
+  do {
+    check = 0;
+    for(int i = 0; i < NUM_AXES; i++) {
+      if(motors[i].pos > 0){
+        if (motors[i].switch_pin > 0){              // if there is a switch, move until it triggers then set that position to zero
+          if (digitalRead(motors[i].switch_pin)){   // check if switch is triggered
+            motors[i].pos = 0;          
+          } else{
+            digitalWrite(motors[i].step_pin, HIGH);
+            digitalWrite(motors[i].step_pin, LOW);
+          }
+        } else {                                    // if there is no switch, just reset the position to what it thinks is zero
+          digitalWrite(motors[i].step_pin, HIGH);
+          digitalWrite(motors[i].step_pin, LOW);
+          motors[i].pos--;
+        }
+        check++;
+      }
+    }
+    delayMicroseconds(step_delay);
+  } while(check != 0);
+  where();
 }
 
 /**
@@ -259,9 +382,10 @@ void setup() {
   motor_enable();
   
   help();
-  zero_position();
+  //zero_position();
   set_feedrate(1000);
-  
+  abs_mode = true;
+  mm_mode = false;
   ready();
 }
 
