@@ -20,6 +20,18 @@
 * http://www.github.com/MarginallyClever/GcodeCNCDemo
 */
 
+/**
+ * This sketch allows the sampler to interpret g-code commands sent to it via serial port.
+ * 
+ * In the Arduino IDE under 'tools' set the board to "Arduino/Genuino Mega or Mega 2560", 
+ * and the port to whichever one the Arduino is connected to.
+ * 
+ * While uploading to the arduino, hold a screwdriver between the prongs on the port labeled "JPROG" 
+ * until the upload is complete
+ * 
+ * The Serial Monitor tool in the IDE can be used to send G-code directly to the machine for testing purposes
+ */
+
 //------------------------------------------------------------
 // Constants
 //------------------------------------------------------------
