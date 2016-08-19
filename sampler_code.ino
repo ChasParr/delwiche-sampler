@@ -437,7 +437,7 @@ void setup() {
   Serial.begin(BAUD);
   
   motor_setup();
-  motor_enable();
+  motor_disable();  // motors should be turned on when the control software is run
   
   help();
   //zero_position();
